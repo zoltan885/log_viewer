@@ -381,8 +381,11 @@ class JsonlInspectorApp(App):
         self.strip_commands()  # this will clean up the command strings, inplace
         self.highlight_issues = False
         self.highlight_ascan = False
-        self.filtered_data = self.data
-        self.build_table()
+        self.reverse_sort = False
+        self.filtered_data = self.data.copy()
+        self.column_headers = ["#", "line", "spock", "start_time", "duration", "command"]
+        self.sorted_column_headers = self.column_headers.copy()
+        self.build_table(self.filtered_data)
         self.set_focus(self.table)
 
     def load_jsonl(self):
@@ -430,7 +433,7 @@ class JsonlInspectorApp(App):
     
     def issues_only_filter(self,) -> None:
         self.filtered_data = [e for e in self.data if self.issue_filter(e)]
-        self.build_table()
+        self.build_table(self.filtered_data)
 
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
@@ -440,15 +443,69 @@ class JsonlInspectorApp(App):
             self.highlight_issues = event.checkbox.value
         elif event.checkbox.id == "show_issues_only":
             self.issues_only_filter()
-        self.build_table()
+        self.build_table(self.filtered_data)
 
-    def build_table(self):
+    async def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """
+        Handle header selection in the DataTable.
+        This can be used to sort or filter data based on the selected column.
+        """
+        col_name = str(event.label)
+        if col_name.endswith(" ↑") or col_name.endswith(" ↓"):
+            # If the column is already sorted, toggle the sort direction
+            col_name = col_name[:-2]
+        logging.debug(f"Header selected: {col_name}")
+        if col_name in ["#", 'spock']:
+            return None
+
+        #reverse = getattr(self, "reverse_sort", False)
+        self.reverse_sort = not self.reverse_sort
+        logging.debug(f"{self.reverse_sort=}")
+
+        def cast(val, col_name=col_name):
+            if col_name in ("line", "start_time", "duration"):
+                # Attempt to convert to float for numerical sorting
+                try:
+                    return float(val)
+                except ValueError:
+                    return val
+            if col_name == "command":
+                # For command, we keep it as a string
+                return val
+
+        self.sorted_data = sorted(
+            self.filtered_data,
+            key=lambda row: cast(row[col_name]),
+            reverse=self.reverse_sort
+        )
+
+        # update the header style to indicate sorting
+        arrow = " ↓" if self.reverse_sort else " ↑"
+        self.sorted_column_headers = []
+        for coln in self.column_headers:
+            if coln != str(col_name):
+                self.sorted_column_headers.append(coln)
+                #logging.debug(f"Column {col_name} not sorted, keeping original order")
+            elif coln == str(col_name):
+                self.sorted_column_headers.append(coln + arrow)
+                logging.debug(f"Column {coln} sorted, adding arrow: {arrow}")
+
+        logging.debug(f"Sorted column headers: {self.sorted_column_headers}")
+
+        self.build_table(self.sorted_data)
+        logging.debug(f"Data sorted by <{str(event.label)}> in {'descending' if self.reverse_sort else 'ascending'} order")
+
+
+
+
+    def build_table(self, data: list[dict] | None = None) -> None:
         current_scroll = self.table.scroll_y
         focused_row = self.table.cursor_row
 
         self.table.clear(columns=True)
-        self.table.add_columns("#", "line", "spock", "start_time", "duration", "command")
-        for i, entry in enumerate(self.filtered_data):
+        self.table.add_columns(*self.sorted_column_headers)
+        self.table.column_labels = self.sorted_column_headers  # this can be used to set the column labels, but keep column names internally
+        for i, entry in enumerate(data):
             
             if self.highlight_issues and self.issue_filter(entry):
                 styled_row = [
@@ -497,10 +554,10 @@ class JsonlInspectorApp(App):
         self.filtered_data = [
             e for e in self.data if query in e.get("command", "").lower()
         ]
-        self.build_table()
+        self.build_table(self.filtered_data)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        logging.debug(f"Row selected: {event.row_key}")
+        #logging.debug(f"Row selected: {event.row_key}")
         row_index = self.table.get_row_index(event.row_key)
         if row_index is not None and 0 <= row_index < len(self.filtered_data):
             entry = self.filtered_data[row_index]
